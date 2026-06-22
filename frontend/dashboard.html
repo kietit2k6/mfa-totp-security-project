@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bảng điều khiển | MFA Demo</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container dashboard-card">
+        <div class="success-icon">🎉</div>
+        <h1 id="welcome-msg">Đang tải...</h1>
+        <p class="subtitle">Bạn đã đăng nhập thành công bằng Xác minh đa nhân tố (2FA).</p>
+        
+        <button onclick="logout()" style="background-color: #475569; margin-top: 20px;">Đăng xuất</button>
+    </div>
+
+    <script>
+        let csrfToken = '';
+        window.onload = async () => {
+            try {
+                const tokenRes = await fetch('/api/csrf-token');
+                if (tokenRes.ok) {
+                    const tokenData = await tokenRes.json();
+                    csrfToken = tokenData.csrfToken;
+                }
+
+                const res = await fetch('/api/dashboard');
+                const data = await res.json();
+                
+                if (res.ok) {
+                    document.getElementById('welcome-msg').textContent = data.message.replace('Welcome to the secure dashboard,', 'Chào mừng đến với trang quản trị,');
+                } else {
+                    window.location.href = '/';
+                }
+            } catch (err) {
+                window.location.href = '/';
+            }
+        };
+
+        async function logout() {
+            try {
+                await fetch('/api/logout', { 
+                    method: 'POST',
+                    headers: { 'CSRF-Token': csrfToken }
+                });
+                window.location.href = '/';
+            } catch (err) {
+                console.error(err);
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "name": "mfa-demo",
+  "version": "1.0.0",
+  "description": "2FA/MFA System Demo",
+  "main": "backend/server.js",
+  "scripts": {
+    "start": "node backend/server.js"
+  },
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "cookie-parser": "^1.4.7",
+    "csurf": "^1.11.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.5.2",
+    "express-session": "^1.19.0",
+    "express-validator": "^7.3.2",
+    "otplib": "^11.0.1",
+    "qrcode": "^1.5.4",
+    "sqlite3": "^6.0.1"
+  }
+}

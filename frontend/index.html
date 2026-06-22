@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Đăng nhập bảo mật | MFA Demo</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container" id="login-container">
+        <h1>Chào mừng trở lại</h1>
+        <p class="subtitle">Nhập thông tin đăng nhập để tiếp tục</p>
+        
+        <div id="error-msg" class="error"></div>
+        
+        <input type="text" id="username" placeholder="Tên đăng nhập" autocomplete="username">
+        <input type="password" id="password" placeholder="Mật khẩu" autocomplete="current-password">
+        
+        <button id="login-btn" onclick="login()">Đăng nhập</button>
+        <a href="#" class="toggle-link" onclick="toggleMode()">Chưa có tài khoản? Đăng ký</a>
+    </div>
+
+    <script>
+        let isLogin = true;
+        let csrfToken = '';
+
+        window.onload = async () => {
+            try {
+                const res = await fetch('/api/csrf-token');
+                const data = await res.json();
+                if (res.ok) csrfToken = data.csrfToken;
+            } catch(e) {
+                console.error("Failed to fetch CSRF token");
+            }
+        };
+
+        function toggleMode() {
+            isLogin = !isLogin;
+            const title = document.querySelector('h1');
+            const subtitle = document.querySelector('.subtitle');
+            const btn = document.getElementById('login-btn');
+            const toggleLink = document.querySelector('.toggle-link');
+            const errorMsg = document.getElementById('error-msg');
+            
+            errorMsg.style.display = 'none';
+
+            if (isLogin) {
+                title.textContent = 'Chào mừng trở lại';
+                subtitle.textContent = 'Nhập thông tin đăng nhập để tiếp tục';
+                btn.textContent = 'Đăng nhập';
+                toggleLink.textContent = "Chưa có tài khoản? Đăng ký";
+            } else {
+                title.textContent = 'Tạo tài khoản';
+                subtitle.textContent = 'Đăng ký để bảo vệ tài khoản bằng 2FA';
+                btn.textContent = 'Đăng ký';
+                toggleLink.textContent = "Đã có tài khoản? Đăng nhập";
+            }
+        }
+
+        async function login() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            const errorMsg = document.getElementById('error-msg');
+
+            if (!username || !password) {
+                errorMsg.textContent = 'Vui lòng điền đủ thông tin';
+                errorMsg.style.display = 'block';
+                return;
+            }
+
+            const endpoint = isLogin ? '/api/login' : '/api/register';
+            
+            try {
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'CSRF-Token': csrfToken
+                    },
+                    body: JSON.stringify({ username, password })
+                });
+
+                const data = await res.json();
+
+                if (!res.ok) {
+                    errorMsg.textContent = data.error || 'Đã có lỗi xảy ra';
+                    errorMsg.style.display = 'block';
+                    return;
+                }
+
+                if (!isLogin) {
+                    // Registration successful, switch to login
+                    errorMsg.style.display = 'none';
+                    alert('Đăng ký thành công! Vui lòng đăng nhập.');
+                    toggleMode();
+                    document.getElementById('password').value = '';
+                } else {
+                    // Login successful, handle redirect
+                    if (data.redirect) {
+                        window.location.href = data.redirect;
+                    }
+                }
+            } catch (err) {
+                errorMsg.textContent = 'Lỗi kết nối';
+                errorMsg.style.display = 'block';
+            }
+        }
+    </script>
+</body>
+</html>

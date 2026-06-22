@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Xác minh 2FA | MFA Demo</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <h1>Xác minh 2 bước</h1>
+        <p class="subtitle">Nhập mã xác minh từ ứng dụng Authenticator của bạn.</p>
+        
+        <div id="error-msg" class="error"></div>
+        
+        <input type="text" id="otp-code" placeholder="000000" maxlength="6" autocomplete="off" style="text-align: center; font-size: 20px; letter-spacing: 4px;">
+        
+        <button onclick="verifyLogin()">Xác minh</button>
+        <a href="/" class="toggle-link">Hủy</a>
+    </div>
+
+    <script>
+        let csrfToken = '';
+        window.onload = async () => {
+            try {
+                const tokenRes = await fetch('/api/csrf-token');
+                if (tokenRes.ok) {
+                    const tokenData = await tokenRes.json();
+                    csrfToken = tokenData.csrfToken;
+                }
+            } catch(e) {}
+        };
+
+        async function verifyLogin() {
+            const token = document.getElementById('otp-code').value;
+            const errorMsg = document.getElementById('error-msg');
+            const btn = document.querySelector('button');
+
+            if (!token || token.length !== 6) {
+                errorMsg.textContent = 'Vui lòng nhập mã 6 số hợp lệ';
+                errorMsg.style.display = 'block';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Đang xác minh...';
+
+            try {
+                const res = await fetch('/api/verify-login-2fa', {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'CSRF-Token': csrfToken
+                    },
+                    body: JSON.stringify({ token })
+                });
+
+                const data = await res.json();
+
+                if (res.ok && data.success) {
+                    window.location.href = '/dashboard.html';
+                } else {
+                    errorMsg.textContent = data.error || 'Mã không đúng';
+                    errorMsg.style.display = 'block';
+                    btn.disabled = false;
+                    btn.textContent = 'Xác minh';
+                    document.getElementById('otp-code').value = '';
+                }
+            } catch (err) {
+                errorMsg.textContent = 'Lỗi kết nối mạng';
+                errorMsg.style.display = 'block';
+                btn.disabled = false;
+                btn.textContent = 'Xác minh';
+            }
+        }
+    </script>
+</body>
+</html>

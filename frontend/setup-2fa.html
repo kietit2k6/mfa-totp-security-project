@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cài đặt 2FA | MFA Demo</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <h1>Bảo vệ tài khoản</h1>
+        <p class="subtitle">Cài đặt Xác thực đa nhân tố (2FA)</p>
+        
+        <div id="error-msg" class="error"></div>
+        
+        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
+            1. Tải ứng dụng Google Authenticator<br>
+            2. Quét mã QR bên dưới
+        </p>
+
+        <div class="qr-container">
+            <img id="qr-image" src="" alt="Mã QR" width="200" height="200" style="display:none;">
+        </div>
+
+        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
+            3. Nhập mã 6 số từ ứng dụng
+        </p>
+
+        <input type="text" id="otp-code" placeholder="000000" maxlength="6" autocomplete="off" style="text-align: center; font-size: 20px; letter-spacing: 4px;">
+        
+        <button onclick="verifySetup()">Kích hoạt 2FA</button>
+    </div>
+
+    <script>
+        let csrfToken = '';
+        // Load QR Code on page load
+        window.onload = async () => {
+            try {
+                // Fetch CSRF token first
+                const tokenRes = await fetch('/api/csrf-token');
+                if (tokenRes.ok) {
+                    const tokenData = await tokenRes.json();
+                    csrfToken = tokenData.csrfToken;
+                }
+
+                const res = await fetch('/api/setup-2fa', { 
+                    method: 'POST',
+                    headers: { 'CSRF-Token': csrfToken }
+                });
+                const data = await res.json();
+                
+                if (res.ok && data.qrCode) {
+                    const img = document.getElementById('qr-image');
+                    img.src = data.qrCode;
+                    img.style.display = 'block';
+                } else {
+                    document.getElementById('error-msg').textContent = data.error || 'Không thể tạo mã cài đặt';
+                    document.getElementById('error-msg').style.display = 'block';
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        };
+
+        async function verifySetup() {
+            const token = document.getElementById('otp-code').value;
+            const errorMsg = document.getElementById('error-msg');
+
+            if (!token || token.length !== 6) {
+                errorMsg.textContent = 'Vui lòng nhập mã 6 số hợp lệ';
+                errorMsg.style.display = 'block';
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/verify-setup-2fa', {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'CSRF-Token': csrfToken
+                    },
+                    body: JSON.stringify({ token })
+                });
+
+                const data = await res.json();
+
+                if (res.ok && data.success) {
+                    window.location.href = '/dashboard.html';
+                } else {
+                    errorMsg.textContent = data.error || 'Mã không đúng';
+                    errorMsg.style.display = 'block';
+                }
+            } catch (err) {
+                errorMsg.textContent = 'Lỗi kết nối mạng';
+                errorMsg.style.display = 'block';
+            }
+        }
+    </script>
+</body>
+</html>
