@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
 const rateLimit = require('express-rate-limit');
-const { authenticator } = require('otplib'); // Using otplib@11 for straightforward Google Authenticator support
+const { authenticator } = require('otplib');
 const qrcode = require('qrcode');
 const path = require('path');
 const bcrypt = require('bcrypt');
@@ -167,22 +167,25 @@ app.post('/api/verify-setup-2fa', csrfProtection, [
         return res.status(401).json({ error: 'Phiên đăng nhập đã hết hạn' });
     }
     const { token } = req.body;
+    // Lưu trước khi regenerate() xóa session cũ
+    const currentUserId = req.session.userId;
+    const currentUsername = req.session.username;
 
-    db.get(`SELECT two_factor_secret FROM users WHERE id = ?`, [req.session.userId], (err, user) => {
+    db.get(`SELECT two_factor_secret FROM users WHERE id = ?`, [currentUserId], (err, user) => {
         if (err || !user || !user.two_factor_secret) return res.status(400).json({ error: 'Chưa cài đặt 2FA' });
 
         const secret = decrypt(user.two_factor_secret);
         const isValid = authenticator.check(token, secret);
 
         if (isValid) {
-            db.run(`UPDATE users SET two_factor_enabled = 1 WHERE id = ?`, [req.session.userId], (err) => {
+            db.run(`UPDATE users SET two_factor_enabled = 1 WHERE id = ?`, [currentUserId], (err) => {
                 if (err) return res.status(500).json({ error: 'Lỗi cơ sở dữ liệu' });
                 
                 // Session fixation mitigation for 2FA success
                 req.session.regenerate((err) => {
                     if (err) return res.status(500).json({ error: 'Lỗi phiên đăng nhập' });
-                    req.session.userId = user.id;
-                    req.session.username = user.username;
+                    req.session.userId = currentUserId;
+                    req.session.username = currentUsername;
                     req.session.authenticated = true;
                     res.json({ success: true });
                 });
@@ -201,8 +204,11 @@ app.post('/api/verify-login-2fa', login2faLimiter, csrfProtection, [
         return res.status(401).json({ error: 'Phiên đăng nhập hết hạn hoặc chưa yêu cầu 2FA' });
     }
     const { token } = req.body;
+    // Lưu trước khi regenerate() xóa session cũ
+    const currentUserId = req.session.userId;
+    const currentUsername = req.session.username;
 
-    db.get(`SELECT two_factor_secret FROM users WHERE id = ?`, [req.session.userId], (err, user) => {
+    db.get(`SELECT two_factor_secret FROM users WHERE id = ?`, [currentUserId], (err, user) => {
         if (err || !user || !user.two_factor_secret) return res.status(400).json({ error: 'Chưa cài đặt 2FA' });
 
         const secret = decrypt(user.two_factor_secret);
@@ -212,8 +218,8 @@ app.post('/api/verify-login-2fa', login2faLimiter, csrfProtection, [
             // Session fixation mitigation for 2FA success
             req.session.regenerate((err) => {
                 if (err) return res.status(500).json({ error: 'Lỗi phiên đăng nhập' });
-                req.session.userId = user.id;
-                req.session.username = user.username;
+                req.session.userId = currentUserId;
+                req.session.username = currentUsername;
                 req.session.authenticated = true;
                 res.json({ success: true });
             });
