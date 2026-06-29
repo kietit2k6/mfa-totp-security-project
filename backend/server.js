@@ -31,7 +31,7 @@ app.use(session({
     keys: [process.env.SESSION_SECRET],
     maxAge: 600000, // 10 phút
     httpOnly: true,
-    sameSite: 'strict',
+    sameSite: 'lax', // Đổi sang lax để tương thích tốt hơn trên môi trường Vercel preview
     secure: process.env.NODE_ENV === 'production' // Yêu cầu HTTPS khi chạy production
 }));
 
@@ -66,6 +66,12 @@ const csrfProtection = (req, res, next) => {
     // Các request thay đổi trạng thái (POST, PUT, DELETE,...) bắt buộc phải khớp Token
     const clientToken = req.headers['csrf-token'] || req.headers['x-csrf-token'];
     const sessionToken = req.session.csrfToken;
+
+    // Log chẩn đoán lỗi CSRF
+    console.log(`[CSRF Debug] Method: ${req.method}, Path: ${req.path}`);
+    console.log(`[CSRF Debug] Client Token gửi lên: ${clientToken}`);
+    console.log(`[CSRF Debug] Session Token lưu ở Server: ${sessionToken}`);
+    console.log(`[CSRF Debug] Cookie Header nhận được: ${req.headers.cookie}`);
 
     if (!sessionToken || clientToken !== sessionToken) {
         console.warn(`[SECURITY] Từ chối request do lỗi CSRF Token từ IP: ${req.ip}`);
