@@ -59,7 +59,7 @@
         }
 
         async function login() {
-            const username = document.getElementById('username').value;
+            const username = document.getElementById('username').value.trim();
             const password = document.getElementById('password').value;
             const errorMsg = document.getElementById('error-msg');
 
@@ -67,6 +67,20 @@
                 errorMsg.textContent = 'Vui lòng điền đủ thông tin';
                 errorMsg.style.display = 'block';
                 return;
+            }
+
+            // Kiểm tra định dạng đầu vào trực tiếp ở Frontend khi Đăng ký
+            if (!isLogin) {
+                if (username.length < 3 || username.length > 30) {
+                    errorMsg.textContent = 'Tên đăng nhập phải chứa từ 3 đến 30 ký tự';
+                    errorMsg.style.display = 'block';
+                    return;
+                }
+                if (password.length < 8) {
+                    errorMsg.textContent = 'Mật khẩu đăng ký phải chứa ít nhất 8 ký tự';
+                    errorMsg.style.display = 'block';
+                    return;
+                }
             }
 
             const endpoint = isLogin ? '/api/login' : '/api/register';

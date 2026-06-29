@@ -107,7 +107,8 @@ const login2faLimiter = rateLimit({
 const validate = (req, res, next) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-        return res.status(400).json({ error: 'Dữ liệu đầu vào không hợp lệ' });
+        // Trả về thông báo lỗi đầu tiên để hiển thị chi tiết cho người dùng
+        return res.status(400).json({ error: errors.array()[0].msg });
     }
     next();
 };
@@ -190,8 +191,8 @@ app.use(sessionGuard);
 
 // User Registration with input validation and bcrypt
 app.post('/api/register', csrfProtection, [
-    body('username').trim().isLength({ min: 3, max: 30 }).escape(),
-    body('password').isLength({ min: 8 })
+    body('username').trim().isLength({ min: 3, max: 30 }).withMessage('Tên đăng nhập đăng ký phải từ 3 đến 30 ký tự.').escape(),
+    body('password').isLength({ min: 8 }).withMessage('Mật khẩu đăng ký phải dài từ 8 ký tự trở lên.')
 ], validate, async (req, res) => {
     const { username, password } = req.body;
     
@@ -212,8 +213,8 @@ app.post('/api/register', csrfProtection, [
 
 // User Login with timing attack mitigation and session fixation fix
 app.post('/api/login', loginLimiter, csrfProtection, [
-    body('username').trim().notEmpty().escape(),
-    body('password').notEmpty()
+    body('username').trim().notEmpty().withMessage('Tên đăng nhập không được để trống.').escape(),
+    body('password').notEmpty().withMessage('Mật khẩu không được để trống.')
 ], validate, (req, res) => {
     const { username, password } = req.body;
     
