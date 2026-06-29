@@ -57,9 +57,9 @@ const loginLimiter = rateLimit({
 });
 
 const login2faLimiter = rateLimit({
-    windowMs: 5 * 60 * 1000, 
-    max: 3, 
-    message: { error: 'Quá nhiều lần thử mã OTP thất bại. Vui lòng thử lại sau 5 phút.' },
+    windowMs: 15 * 60 * 1000, // 15 phút
+    max: 5, // Giới hạn 5 lần thử mỗi IP
+    message: { error: 'Quá nhiều lần thử mã OTP thất bại. IP đã bị khóa trong 15 phút.' },
     standardHeaders: true, 
     legacyHeaders: false, 
 });
@@ -73,12 +73,86 @@ const validate = (req, res, next) => {
     next();
 };
 
+// --- Security: In-memory stores ---
+
+// 10. Account Lockout Tracking: userId -> { count, lockedUntil }
+const failedOtpAttempts = new Map();
+
+// 11. Used OTP Tracking (Replay Attack Prevention): "userId:token" -> timestamp
+const usedOtpTokens = new Map();
+
+// Tự động dọn dẹp OTP đã dùng mỗi 60 giây
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, timestamp] of usedOtpTokens) {
+        if (now - timestamp > 60000) {
+            usedOtpTokens.delete(key);
+        }
+    }
+}, 60000);
+
+function isAccountLocked(userId) {
+    const record = failedOtpAttempts.get(userId);
+    if (!record) return false;
+    if (record.lockedUntil && Date.now() < record.lockedUntil) return true;
+    if (record.lockedUntil && Date.now() >= record.lockedUntil) {
+        failedOtpAttempts.delete(userId); // Hết thời gian khóa -> mở khóa
+        return false;
+    }
+    return false;
+}
+
+function recordFailedOtp(userId) {
+    const record = failedOtpAttempts.get(userId) || { count: 0, lockedUntil: null };
+    record.count += 1;
+    if (record.count >= 5) {
+        record.lockedUntil = Date.now() + 15 * 60 * 1000; // Khóa tài khoản 15 phút
+        console.warn(`[SECURITY] Tài khoản ID ${userId} đã bị khóa do nhập OTP sai 5 lần liên tiếp.`);
+    }
+    failedOtpAttempts.set(userId, record);
+}
+
+function resetFailedOtp(userId) {
+    failedOtpAttempts.delete(userId);
+}
+
+function isOtpReplay(userId, token) {
+    return usedOtpTokens.has(`${userId}:${token}`);
+}
+
+function markOtpUsed(userId, token) {
+    usedOtpTokens.set(`${userId}:${token}`, Date.now());
+}
+
+// 12. Session Binding Middleware: Kiểm tra IP & User-Agent
+function sessionGuard(req, res, next) {
+    if (req.session && req.session.authenticated) {
+        const currentIp = req.ip;
+        const currentUserAgent = req.headers['user-agent'] || '';
+
+        if (req.session.boundIp && req.session.boundIp !== currentIp) {
+            console.warn(`[SECURITY] Session IP mismatch - User: ${req.session.username}, Expected: ${req.session.boundIp}, Got: ${currentIp}`);
+            req.session.destroy();
+            return res.status(401).json({ error: 'Phát hiện bất thường. Phiên đăng nhập đã bị hủy vì lý do bảo mật.' });
+        }
+
+        if (req.session.boundUserAgent && req.session.boundUserAgent !== currentUserAgent) {
+            console.warn(`[SECURITY] Session User-Agent mismatch - User: ${req.session.username}`);
+            req.session.destroy();
+            return res.status(401).json({ error: 'Phát hiện bất thường. Phiên đăng nhập đã bị hủy vì lý do bảo mật.' });
+        }
+    }
+    next();
+}
+
+app.use(sessionGuard);
+
 // --- Endpoints ---
 
 // User Registration with input validation and bcrypt
 app.post('/api/register', csrfProtection, [
     body('username').trim().isLength({ min: 3, max: 30 }).escape(),
-    body('password').isLength({ min: 6 })
+    body('password').isLength({ min: 8 })
 ], validate, async (req, res) => {
     const { username, password } = req.body;
     
@@ -171,6 +245,12 @@ app.post('/api/verify-setup-2fa', csrfProtection, [
     const currentUserId = req.session.userId;
     const currentUsername = req.session.username;
 
+    // Chống tấn công phát lại (Replay Attack)
+    if (isOtpReplay(currentUserId, token)) {
+        console.warn(`[SECURITY] Replay attack detected - User ID: ${currentUserId}, OTP đã được sử dụng trước đó.`);
+        return res.status(400).json({ error: 'Mã OTP đã được sử dụng. Vui lòng đợi mã mới.' });
+    }
+
     db.get(`SELECT two_factor_secret FROM users WHERE id = ?`, [currentUserId], (err, user) => {
         if (err || !user || !user.two_factor_secret) return res.status(400).json({ error: 'Chưa cài đặt 2FA' });
 
@@ -178,6 +258,9 @@ app.post('/api/verify-setup-2fa', csrfProtection, [
         const isValid = authenticator.check(token, secret);
 
         if (isValid) {
+            // Đánh dấu OTP đã sử dụng để chống replay
+            markOtpUsed(currentUserId, token);
+
             db.run(`UPDATE users SET two_factor_enabled = 1 WHERE id = ?`, [currentUserId], (err) => {
                 if (err) return res.status(500).json({ error: 'Lỗi cơ sở dữ liệu' });
                 
@@ -187,6 +270,10 @@ app.post('/api/verify-setup-2fa', csrfProtection, [
                     req.session.userId = currentUserId;
                     req.session.username = currentUsername;
                     req.session.authenticated = true;
+                    // Ràng buộc Session với IP và User-Agent
+                    req.session.boundIp = req.ip;
+                    req.session.boundUserAgent = req.headers['user-agent'] || '';
+                    console.log(`[AUTH] User "${currentUsername}" đã kích hoạt 2FA thành công từ IP: ${req.ip}`);
                     res.json({ success: true });
                 });
             });
@@ -208,6 +295,18 @@ app.post('/api/verify-login-2fa', login2faLimiter, csrfProtection, [
     const currentUserId = req.session.userId;
     const currentUsername = req.session.username;
 
+    // Kiểm tra khóa tài khoản (Account Lockout)
+    if (isAccountLocked(currentUserId)) {
+        console.warn(`[SECURITY] Tài khoản ID ${currentUserId} đang bị khóa - từ chối xác thực OTP.`);
+        return res.status(423).json({ error: 'Tài khoản đã bị khóa do nhập OTP sai quá 5 lần. Vui lòng thử lại sau 15 phút.' });
+    }
+
+    // Chống tấn công phát lại (Replay Attack)
+    if (isOtpReplay(currentUserId, token)) {
+        console.warn(`[SECURITY] Replay attack detected - User ID: ${currentUserId}, OTP đã được sử dụng trước đó.`);
+        return res.status(400).json({ error: 'Mã OTP đã được sử dụng. Vui lòng đợi mã mới.' });
+    }
+
     db.get(`SELECT two_factor_secret FROM users WHERE id = ?`, [currentUserId], (err, user) => {
         if (err || !user || !user.two_factor_secret) return res.status(400).json({ error: 'Chưa cài đặt 2FA' });
 
@@ -215,16 +314,36 @@ app.post('/api/verify-login-2fa', login2faLimiter, csrfProtection, [
         const isValid = authenticator.check(token, secret);
 
         if (isValid) {
+            // Đánh dấu OTP đã sử dụng để chống replay
+            markOtpUsed(currentUserId, token);
+            // Reset bộ đếm OTP sai khi xác thực thành công
+            resetFailedOtp(currentUserId);
+
             // Session fixation mitigation for 2FA success
             req.session.regenerate((err) => {
                 if (err) return res.status(500).json({ error: 'Lỗi phiên đăng nhập' });
                 req.session.userId = currentUserId;
                 req.session.username = currentUsername;
                 req.session.authenticated = true;
+                // Ràng buộc Session với IP và User-Agent
+                req.session.boundIp = req.ip;
+                req.session.boundUserAgent = req.headers['user-agent'] || '';
+                console.log(`[AUTH] User "${currentUsername}" đã xác thực 2FA thành công từ IP: ${req.ip}`);
                 res.json({ success: true });
             });
         } else {
-            res.status(400).json({ error: 'Mã xác nhận không hợp lệ' });
+            // Ghi nhận lần nhập OTP sai
+            recordFailedOtp(currentUserId);
+            const record = failedOtpAttempts.get(currentUserId);
+            const remaining = 5 - (record ? record.count : 0);
+
+            if (remaining <= 0) {
+                console.warn(`[SECURITY] Tài khoản "${currentUsername}" (ID: ${currentUserId}) đã bị khóa 15 phút từ IP: ${req.ip}`);
+                res.status(423).json({ error: 'Tài khoản đã bị khóa do nhập OTP sai quá 5 lần. Vui lòng thử lại sau 15 phút.' });
+            } else {
+                console.warn(`[AUTH] User "${currentUsername}" nhập OTP sai. Còn ${remaining} lần thử.`);
+                res.status(400).json({ error: `Mã OTP không hợp lệ. Còn ${remaining} lần thử.` });
+            }
         }
     });
 });
