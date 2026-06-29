@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const session = require('express-session');
+const session = require('cookie-session');
 const rateLimit = require('express-rate-limit');
 const { authenticator } = require('otplib');
 const qrcode = require('qrcode');
@@ -25,18 +25,31 @@ app.use(cookieParser());
 // Static files
 app.use(express.static(path.join(__dirname, '../frontend')));
 
-// 2. Secure Session Cookie
+// 2. Secure Cookie-Based Session (Tương thích 100% với Serverless Vercel)
 app.use(session({
-    secret: process.env.SESSION_SECRET,
-    resave: false,
-    saveUninitialized: false,
-    cookie: { 
-        maxAge: 600000,
-        httpOnly: true,
-        sameSite: 'strict',
-        secure: process.env.NODE_ENV === 'production' // Requires HTTPS in production
-    }
+    name: 'session',
+    keys: [process.env.SESSION_SECRET],
+    maxAge: 600000, // 10 phút
+    httpOnly: true,
+    sameSite: 'strict',
+    secure: process.env.NODE_ENV === 'production' // Yêu cầu HTTPS khi chạy production
 }));
+
+// Giả lập hàm req.session.regenerate cho cookie-session
+app.use((req, res, next) => {
+    if (req.session && !req.session.regenerate) {
+        req.session.regenerate = function(callback) {
+            // Xóa sạch các thuộc tính cũ để reset session
+            for (const key in this) {
+                if (typeof this[key] !== 'function') {
+                    delete this[key];
+                }
+            }
+            callback(null);
+        };
+    }
+    next();
+});
 
 // 3. Custom CSRF Protection Middleware
 const csrfProtection = (req, res, next) => {
