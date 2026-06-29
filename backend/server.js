@@ -7,7 +7,6 @@ const qrcode = require('qrcode');
 const path = require('path');
 const bcrypt = require('bcrypt');
 const cookieParser = require('cookie-parser');
-const csurf = require('csurf');
 const { body, validationResult } = require('express-validator');
 
 const db = require('./db');
@@ -39,12 +38,32 @@ app.use(session({
     }
 }));
 
-// 3. CSRF Protection Middleware
-const csrfProtection = csurf({ cookie: true });
+// 3. Custom CSRF Protection Middleware
+const csrfProtection = (req, res, next) => {
+    // Tự động tạo CSRF token nếu chưa có trong session
+    if (!req.session.csrfToken) {
+        req.session.csrfToken = require('crypto').randomBytes(32).toString('hex');
+    }
 
-// Endpoint to provide CSRF token to frontend
+    // Các request đọc dữ liệu (GET, HEAD, OPTIONS) không cần kiểm tra CSRF
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') {
+        return next();
+    }
+
+    // Các request thay đổi trạng thái (POST, PUT, DELETE,...) bắt buộc phải khớp Token
+    const clientToken = req.headers['csrf-token'] || req.headers['x-csrf-token'];
+    const sessionToken = req.session.csrfToken;
+
+    if (!sessionToken || clientToken !== sessionToken) {
+        console.warn(`[SECURITY] Từ chối request do lỗi CSRF Token từ IP: ${req.ip}`);
+        return res.status(403).json({ error: 'CSRF token không hợp lệ hoặc đã hết hạn.' });
+    }
+    next();
+};
+
+// Endpoint để cung cấp CSRF token cho frontend
 app.get('/api/csrf-token', csrfProtection, (req, res) => {
-    res.json({ csrfToken: req.csrfToken() });
+    res.json({ csrfToken: req.session.csrfToken });
 });
 
 // 4. Rate Limiter for Login (Brute Force Protection)
@@ -361,13 +380,15 @@ app.get('/api/dashboard', (req, res) => {
     res.json({ message: `Chào mừng đến với trang quản trị, ${req.session.username}!` });
 });
 
-// CSRF error handler
-app.use(function (err, req, res, next) {
-    if (err.code !== 'EBADCSRFTOKEN') return next(err);
-    res.status(403).json({ error: 'CSRF token không hợp lệ' });
-});
+// Server port config and startup
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-});
+
+// Chỉ lắng nghe cổng trực tiếp khi chạy ở máy local
+if (!process.env.VERCEL) {
+    app.listen(PORT, () => {
+        console.log(`Server running on http://localhost:${PORT}`);
+    });
+}
+
+module.exports = app;

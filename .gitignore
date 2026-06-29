@@ -1,0 +1,30 @@
+# Dependency directories
+node_modules/
+
+# Environment variables (Rất quan trọng - chứa Key bảo mật)
+.env
+.env.local
+.env.production
+
+# SQLite Databases (Tránh đẩy dữ liệu local lên git)
+backend/database.sqlite
+backend/database.sqlite-journal
+backend/database.sqlite3
+*.sqlite
+*.db
+
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# OS Files (Dành cho macOS)
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+Thumbs.db
+
+# IDE/Editors
+.vscode/
+.idea/
