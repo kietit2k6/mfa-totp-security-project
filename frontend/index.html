@@ -81,10 +81,14 @@
                     body: JSON.stringify({ username, password })
                 });
 
-                const data = await res.json();
+                let data = {};
+                const contentType = res.headers.get('content-type');
+                if (contentType && contentType.includes('application/json')) {
+                    data = await res.json();
+                }
 
                 if (!res.ok) {
-                    errorMsg.textContent = data.error || 'Đã có lỗi xảy ra';
+                    errorMsg.textContent = data.error || `Đã xảy ra lỗi hệ thống phía máy chủ (${res.status})`;
                     errorMsg.style.display = 'block';
                     return;
                 }
@@ -102,7 +106,8 @@
                     }
                 }
             } catch (err) {
-                errorMsg.textContent = 'Lỗi kết nối';
+                console.error(err);
+                errorMsg.textContent = 'Lỗi kết nối mạng hoặc máy chủ không phản hồi';
                 errorMsg.style.display = 'block';
             }
         }
