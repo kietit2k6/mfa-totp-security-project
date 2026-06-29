@@ -5,7 +5,7 @@ const rateLimit = require('express-rate-limit');
 const { authenticator } = require('otplib');
 const qrcode = require('qrcode');
 const path = require('path');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const cookieParser = require('cookie-parser');
 const { body, validationResult } = require('express-validator');
 
