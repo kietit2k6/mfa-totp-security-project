@@ -18,6 +18,7 @@ if (!process.env.SESSION_SECRET) {
 }
 
 const app = express();
+app.set('trust proxy', 1); // Tin tưởng Edge Proxy của Vercel để lấy IP thực và chạy HTTPS Cookie
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
