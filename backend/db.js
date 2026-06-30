@@ -44,20 +44,21 @@ function writeJsonData(data) {
 
 if (mongoUri) {
     useMongo = true;
-    console.log("Tìm thấy cấu hình MongoDB. Đang kết nối...");
+    console.log("[DB Debug] Tìm thấy cấu hình MONGODB_URI (độ dài: " + mongoUri.length + "). Đang kết nối...");
 } else {
-    console.log("Không cấu hình MONGODB_URI. Sử dụng JSON database dự phòng tại: " + dbPath);
+    console.log("[DB Debug] Không tìm thấy cấu hình MONGODB_URI. Sử dụng JSON database dự phòng tại: " + dbPath);
 }
 
 async function getCollection() {
     if (!useMongo) return null;
     if (!dbInstance) {
         try {
-            client = new MongoClient(mongoUri);
+            client = new MongoClient(mongoUri, { serverSelectionTimeoutMS: 5000 });
             await client.connect();
             dbInstance = client.db();
             console.log("Đã kết nối MongoDB thành công.");
         } catch (err) {
+            console.error("[DB Debug] Lỗi kết nối MongoDB CHI TIẾT:", err);
             console.error("Lỗi kết nối MongoDB, chuyển hướng sang JSON database dự phòng:", err.message);
             useMongo = false; // Tự động fallback nếu kết nối lỗi
             return null;
