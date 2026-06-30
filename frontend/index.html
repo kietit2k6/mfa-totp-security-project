@@ -102,7 +102,19 @@
                 }
 
                 if (!res.ok) {
-                    errorMsg.textContent = data.error || `Đã xảy ra lỗi hệ thống phía máy chủ (${res.status})`;
+                    if (res.status === 403 || (data.error && data.error.includes('CSRF'))) {
+                        // Tự làm mới CSRF token từ server
+                        try {
+                            const csrfRes = await fetch('/api/csrf-token');
+                            const csrfData = await csrfRes.json();
+                            if (csrfRes.ok) csrfToken = csrfData.csrfToken;
+                        } catch(e) {
+                            console.error("Lỗi làm mới CSRF token:", e);
+                        }
+                        errorMsg.textContent = 'Phiên làm việc đã hết hạn do chờ lâu. Đang tự động làm mới, vui lòng bấm đăng nhập lại.';
+                    } else {
+                        errorMsg.textContent = data.error || `Đã xảy ra lỗi hệ thống phía máy chủ (${res.status})`;
+                    }
                     errorMsg.style.display = 'block';
                     return;
                 }

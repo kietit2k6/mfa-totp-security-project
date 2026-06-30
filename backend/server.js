@@ -30,7 +30,7 @@ app.use(express.static(path.join(__dirname, '../frontend')));
 app.use(session({
     name: 'session',
     keys: [process.env.SESSION_SECRET],
-    maxAge: 600000, // 10 phút
+    maxAge: 3600000, // 1 giờ (để đảm bảo không bị hết hạn phiên khi chờ 15 phút khóa tài khoản)
     httpOnly: true,
     sameSite: 'lax', // Đổi sang lax để tương thích tốt hơn trên môi trường Vercel preview
     secure: process.env.NODE_ENV === 'production' // Yêu cầu HTTPS khi chạy production

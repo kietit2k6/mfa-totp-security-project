@@ -92,7 +92,19 @@
                 if (res.ok && data.success) {
                     window.location.href = '/dashboard.html';
                 } else {
-                    errorMsg.textContent = data.error || `Lỗi hệ thống phía máy chủ (${res.status})`;
+                    if (res.status === 403 || (data.error && data.error.includes('CSRF'))) {
+                        // Tự làm mới CSRF token từ server
+                        try {
+                            const csrfRes = await fetch('/api/csrf-token');
+                            const csrfData = await csrfRes.json();
+                            if (csrfRes.ok) csrfToken = csrfData.csrfToken;
+                        } catch(e) {
+                            console.error("Lỗi làm mới CSRF token:", e);
+                        }
+                        errorMsg.textContent = 'Phiên làm việc đã hết hạn. Đang tự động làm mới, vui lòng bấm xác nhận lại.';
+                    } else {
+                        errorMsg.textContent = data.error || `Lỗi hệ thống phía máy chủ (${res.status})`;
+                    }
                     errorMsg.style.display = 'block';
                 }
             } catch (err) {
