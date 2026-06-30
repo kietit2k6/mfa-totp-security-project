@@ -459,8 +459,8 @@ app.post('/api/verify-login-2fa', login2faLimiter, csrfProtection, [
 });
 
 app.post('/api/logout', csrfProtection, (req, res) => {
-    req.session.destroy();
-    res.clearCookie('connect.sid');
+    req.session = null; // Cú pháp chuẩn của cookie-session để hủy session
+    res.clearCookie('session'); // Xóa cookie phiên
     res.json({ success: true });
 });
 
