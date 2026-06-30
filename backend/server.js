@@ -88,17 +88,17 @@ app.get('/api/csrf-token', csrfProtection, (req, res) => {
 
 // 4. Rate Limiter for Login (Brute Force Protection)
 const loginLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 5, // Limit each IP to 5 login requests per `window`
-    message: { error: 'Quá nhiều lần thử đăng nhập. Vui lòng thử lại sau 15 phút.' },
+    windowMs: 15 * 60 * 1000, // 15 phút
+    max: 20, // Cho phép tối đa 20 request/IP trong 15 phút để nới lỏng cho IP dùng chung
+    message: { error: 'IP này đã thực hiện quá nhiều yêu cầu đăng nhập. Vui lòng thử lại sau 15 phút.' },
     standardHeaders: true, 
     legacyHeaders: false, 
 });
 
 const login2faLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 phút
-    max: 5, // Giới hạn 5 lần thử mỗi IP
-    message: { error: 'Quá nhiều lần thử mã OTP thất bại. IP đã bị khóa trong 15 phút.' },
+    max: 20, // Cho phép tối đa 20 request/IP trong 15 phút
+    message: { error: 'IP này đã thực hiện quá nhiều yêu cầu xác thực OTP. Vui lòng thử lại sau 15 phút.' },
     standardHeaders: true, 
     legacyHeaders: false, 
 });
@@ -115,8 +115,11 @@ const validate = (req, res, next) => {
 
 // --- Security: In-memory stores ---
 
-// 10. Account Lockout Tracking: userId -> { count, lockedUntil }
+// 10. Account Lockout Tracking (OTP): userId -> { count, lockedUntil }
 const failedOtpAttempts = new Map();
+
+// 10b. Account Lockout Tracking (Password): username -> { count, lockedUntil }
+const failedPasswordAttempts = new Map();
 
 // 11. Used OTP Tracking (Replay Attack Prevention): "userId:token" -> timestamp
 const usedOtpTokens = new Map();
@@ -154,6 +157,32 @@ function recordFailedOtp(userId) {
 
 function resetFailedOtp(userId) {
     failedOtpAttempts.delete(userId);
+}
+
+// Helpers quản lý khóa tài khoản do nhập sai Mật khẩu
+function isPasswordAccountLocked(username) {
+    const record = failedPasswordAttempts.get(username);
+    if (!record) return false;
+    if (record.lockedUntil && Date.now() < record.lockedUntil) return true;
+    if (record.lockedUntil && Date.now() >= record.lockedUntil) {
+        failedPasswordAttempts.delete(username); // Hết thời gian khóa -> mở khóa
+        return false;
+    }
+    return false;
+}
+
+function recordFailedPassword(username) {
+    const record = failedPasswordAttempts.get(username) || { count: 0, lockedUntil: null };
+    record.count += 1;
+    if (record.count >= 5) {
+        record.lockedUntil = Date.now() + 15 * 60 * 1000; // Khóa tài khoản 15 phút
+        console.warn(`[SECURITY] Tài khoản "${username}" đã bị khóa do nhập sai mật khẩu 5 lần liên tiếp.`);
+    }
+    failedPasswordAttempts.set(username, record);
+}
+
+function resetFailedPassword(username) {
+    failedPasswordAttempts.delete(username);
 }
 
 function isOtpReplay(userId, token) {
@@ -218,6 +247,12 @@ app.post('/api/login', loginLimiter, csrfProtection, [
 ], validate, (req, res) => {
     const { username, password } = req.body;
     
+    // Kiểm tra khóa tài khoản mật khẩu
+    if (isPasswordAccountLocked(username)) {
+        console.warn(`[SECURITY] Tài khoản "${username}" đang bị khóa mật khẩu - từ chối đăng nhập.`);
+        return res.status(423).json({ error: 'Tài khoản đã bị khóa do nhập sai mật khẩu quá 5 lần. Vui lòng thử lại sau 15 phút.' });
+    }
+    
     db.get(`SELECT * FROM users WHERE username = ?`, [username], async (err, user) => {
         let isValidPassword = false;
         
@@ -229,8 +264,20 @@ app.post('/api/login', loginLimiter, csrfProtection, [
         }
 
         if (err || !user || !isValidPassword) {
-            return res.status(401).json({ error: 'Sai tên đăng nhập hoặc mật khẩu' });
+            // Ghi nhận lần nhập sai mật khẩu
+            recordFailedPassword(username);
+            const record = failedPasswordAttempts.get(username);
+            const remaining = 5 - (record ? record.count : 0);
+
+            if (remaining <= 0) {
+                return res.status(423).json({ error: 'Tài khoản đã bị khóa do nhập sai mật khẩu quá 5 lần. Vui lòng thử lại sau 15 phút.' });
+            } else {
+                return res.status(401).json({ error: `Sai tên đăng nhập hoặc mật khẩu. Còn ${remaining} lần thử.` });
+            }
         }
+
+        // Đăng nhập thành công -> reset bộ đếm sai mật khẩu
+        resetFailedPassword(username);
 
         // 7. Session Fixation Mitigation: Regenerate session after basic auth
         req.session.regenerate((err) => {
