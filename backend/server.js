@@ -241,6 +241,8 @@ app.post('/api/login', loginLimiter, csrfProtection, [
 
             if (user.two_factor_enabled) {
                 req.session.pending2fa = true;
+                // Lưu Secret vào session để xác thực OTP trên Vercel Serverless
+                req.session.userEncryptedSecret = user.two_factor_secret;
                 return res.json({ require2fa: true, redirect: '/verify-2fa.html' });
             } else {
                 // 8. Bypass 2FA Setup Fix: Do NOT set authenticated = true yet.
@@ -263,8 +265,11 @@ app.post('/api/setup-2fa', csrfProtection, (req, res) => {
 
     const encryptedSecret = encrypt(secret);
 
+    // Lưu Secret Key vào session cookie (để tương thích Vercel Serverless)
+    req.session.tempEncryptedSecret = encryptedSecret;
+
     db.run(`UPDATE users SET two_factor_secret = ? WHERE id = ?`, [encryptedSecret, req.session.userId], (err) => {
-        if (err) return res.status(500).json({ error: 'Lỗi cơ sở dữ liệu' });
+        if (err) console.warn('[DB] Lỗi lưu secret vào DB, sử dụng session làm dự phòng.');
 
         qrcode.toDataURL(otpauthUrl, (err, dataUrl) => {
             if (err) return res.status(500).json({ error: 'Lỗi tạo mã QR' });
@@ -281,36 +286,37 @@ app.post('/api/verify-setup-2fa', csrfProtection, [
         return res.status(401).json({ error: 'Phiên đăng nhập đã hết hạn' });
     }
     const { token } = req.body;
-    // Lưu trước khi regenerate() xóa session cũ
     const currentUserId = req.session.userId;
     const currentUsername = req.session.username;
 
     // Chống tấn công phát lại (Replay Attack)
     if (isOtpReplay(currentUserId, token)) {
-        console.warn(`[SECURITY] Replay attack detected - User ID: ${currentUserId}, OTP đã được sử dụng trước đó.`);
+        console.warn(`[SECURITY] Replay attack detected - User ID: ${currentUserId}`);
         return res.status(400).json({ error: 'Mã OTP đã được sử dụng. Vui lòng đợi mã mới.' });
     }
 
-    db.get(`SELECT two_factor_secret FROM users WHERE id = ?`, [currentUserId], (err, user) => {
-        if (err || !user || !user.two_factor_secret) return res.status(400).json({ error: 'Chưa cài đặt 2FA' });
+    // Ưu tiên lấy Secret từ session (Vercel), nếu không thì từ DB (Local)
+    const encryptedSecret = req.session.tempEncryptedSecret;
 
-        const secret = decrypt(user.two_factor_secret);
+    const tryVerify = (secretData) => {
+        if (!secretData) return res.status(400).json({ error: 'Chưa cài đặt 2FA. Vui lòng tải lại trang.' });
+
+        const secret = decrypt(secretData);
+        if (!secret) return res.status(400).json({ error: 'Lỗi giải mã Secret Key.' });
+
         const isValid = authenticator.check(token, secret);
 
         if (isValid) {
-            // Đánh dấu OTP đã sử dụng để chống replay
             markOtpUsed(currentUserId, token);
 
-            db.run(`UPDATE users SET two_factor_enabled = 1 WHERE id = ?`, [currentUserId], (err) => {
-                if (err) return res.status(500).json({ error: 'Lỗi cơ sở dữ liệu' });
-                
-                // Session fixation mitigation for 2FA success
+            db.run(`UPDATE users SET two_factor_secret = ?, two_factor_enabled = 1 WHERE id = ?`, [secretData, currentUserId], (err) => {
+                if (err) console.warn('[DB] Lỗi cập nhật DB, nhưng 2FA vẫn được kích hoạt trong session.');
+
                 req.session.regenerate((err) => {
                     if (err) return res.status(500).json({ error: 'Lỗi phiên đăng nhập' });
                     req.session.userId = currentUserId;
                     req.session.username = currentUsername;
                     req.session.authenticated = true;
-                    // Ràng buộc Session với IP và User-Agent
                     req.session.boundIp = req.ip;
                     req.session.boundUserAgent = req.headers['user-agent'] || '';
                     console.log(`[AUTH] User "${currentUsername}" đã kích hoạt 2FA thành công từ IP: ${req.ip}`);
@@ -320,7 +326,17 @@ app.post('/api/verify-setup-2fa', csrfProtection, [
         } else {
             res.status(400).json({ error: 'Mã xác nhận không hợp lệ' });
         }
-    });
+    };
+
+    if (encryptedSecret) {
+        // Có secret trong session -> dùng luôn (Vercel Serverless)
+        tryVerify(encryptedSecret);
+    } else {
+        // Không có trong session -> thử đọc từ DB (Local)
+        db.get(`SELECT two_factor_secret FROM users WHERE id = ?`, [currentUserId], (err, user) => {
+            tryVerify(user ? user.two_factor_secret : null);
+        });
+    }
 });
 
 // Verify Login 2FA
@@ -331,7 +347,6 @@ app.post('/api/verify-login-2fa', login2faLimiter, csrfProtection, [
         return res.status(401).json({ error: 'Phiên đăng nhập hết hạn hoặc chưa yêu cầu 2FA' });
     }
     const { token } = req.body;
-    // Lưu trước khi regenerate() xóa session cũ
     const currentUserId = req.session.userId;
     const currentUsername = req.session.username;
 
@@ -343,49 +358,57 @@ app.post('/api/verify-login-2fa', login2faLimiter, csrfProtection, [
 
     // Chống tấn công phát lại (Replay Attack)
     if (isOtpReplay(currentUserId, token)) {
-        console.warn(`[SECURITY] Replay attack detected - User ID: ${currentUserId}, OTP đã được sử dụng trước đó.`);
+        console.warn(`[SECURITY] Replay attack detected - User ID: ${currentUserId}`);
         return res.status(400).json({ error: 'Mã OTP đã được sử dụng. Vui lòng đợi mã mới.' });
     }
 
-    db.get(`SELECT two_factor_secret FROM users WHERE id = ?`, [currentUserId], (err, user) => {
-        if (err || !user || !user.two_factor_secret) return res.status(400).json({ error: 'Chưa cài đặt 2FA' });
+    // Ʈu tiên lấy Secret từ session (Vercel), nếu không thì từ DB (Local)
+    const encryptedSecret = req.session.userEncryptedSecret;
 
-        const secret = decrypt(user.two_factor_secret);
+    const tryVerify = (secretData) => {
+        if (!secretData) return res.status(400).json({ error: 'Chưa cài đặt 2FA. Vui lòng đăng nhập lại.' });
+
+        const secret = decrypt(secretData);
+        if (!secret) return res.status(400).json({ error: 'Lỗi giải mã Secret Key.' });
+
         const isValid = authenticator.check(token, secret);
 
         if (isValid) {
-            // Đánh dấu OTP đã sử dụng để chống replay
             markOtpUsed(currentUserId, token);
-            // Reset bộ đếm OTP sai khi xác thực thành công
             resetFailedOtp(currentUserId);
 
-            // Session fixation mitigation for 2FA success
             req.session.regenerate((err) => {
                 if (err) return res.status(500).json({ error: 'Lỗi phiên đăng nhập' });
                 req.session.userId = currentUserId;
                 req.session.username = currentUsername;
                 req.session.authenticated = true;
-                // Ràng buộc Session với IP và User-Agent
                 req.session.boundIp = req.ip;
                 req.session.boundUserAgent = req.headers['user-agent'] || '';
                 console.log(`[AUTH] User "${currentUsername}" đã xác thực 2FA thành công từ IP: ${req.ip}`);
                 res.json({ success: true });
             });
         } else {
-            // Ghi nhận lần nhập OTP sai
             recordFailedOtp(currentUserId);
             const record = failedOtpAttempts.get(currentUserId);
             const remaining = 5 - (record ? record.count : 0);
 
             if (remaining <= 0) {
-                console.warn(`[SECURITY] Tài khoản "${currentUsername}" (ID: ${currentUserId}) đã bị khóa 15 phút từ IP: ${req.ip}`);
+                console.warn(`[SECURITY] Tài khoản "${currentUsername}" đã bị khóa 15 phút từ IP: ${req.ip}`);
                 res.status(423).json({ error: 'Tài khoản đã bị khóa do nhập OTP sai quá 5 lần. Vui lòng thử lại sau 15 phút.' });
             } else {
                 console.warn(`[AUTH] User "${currentUsername}" nhập OTP sai. Còn ${remaining} lần thử.`);
                 res.status(400).json({ error: `Mã OTP không hợp lệ. Còn ${remaining} lần thử.` });
             }
         }
-    });
+    };
+
+    if (encryptedSecret) {
+        tryVerify(encryptedSecret);
+    } else {
+        db.get(`SELECT two_factor_secret FROM users WHERE id = ?`, [currentUserId], (err, user) => {
+            tryVerify(user ? user.two_factor_secret : null);
+        });
+    }
 });
 
 app.post('/api/logout', csrfProtection, (req, res) => {
